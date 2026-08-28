@@ -38,8 +38,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.model.CompassState
 import com.example.ui.theme.SophisticatedPrecisionGreen
-import com.example.ui.theme.SophisticatedWarning
-import com.example.ui.theme.SophisticatedError
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
@@ -52,7 +50,6 @@ fun CompassDial(
     modifier: Modifier = Modifier,
     onDialClick: () -> Unit = {}
 ) {
-    val density = LocalDensity.current
     val colorScheme = MaterialTheme.colorScheme
 
     val primaryColor = colorScheme.primary
@@ -64,6 +61,18 @@ fun CompassDial(
     val textSecondary = colorScheme.onSurfaceVariant
     val levelGreen = if (state.nightVisionMode) colorScheme.primary else SophisticatedPrecisionGreen
     val bearingColor = if (state.nightVisionMode) colorScheme.primary else colorScheme.primary
+
+    // Reusable draw helpers to avoid allocation per draw pass
+    val textPaint = remember {
+        Paint().apply {
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    }
+    val textBounds = remember { Rect() }
+    val northNeedlePath = remember { Path() }
+    val southNeedlePath = remember { Path() }
+    val lubberPath = remember { Path() }
 
     // Smooth transition for bubble level
     val animatedPitch by animateFloatAsState(
@@ -114,7 +123,11 @@ fun CompassDial(
                     textSecondary = textSecondary,
                     outlineColor = outlineColor,
                     lockedBearing = state.lockedBearing,
-                    bearingColor = bearingColor
+                    bearingColor = bearingColor,
+                    textPaint = textPaint,
+                    textBounds = textBounds,
+                    northNeedlePath = northNeedlePath,
+                    southNeedlePath = southNeedlePath
                 )
             }
 
@@ -146,7 +159,8 @@ fun CompassDial(
             drawTopLubberLine(
                 center = center,
                 radius = radius,
-                indexColor = primaryColor
+                indexColor = primaryColor,
+                lubberPath = lubberPath
             )
         }
     }
@@ -174,7 +188,7 @@ private fun DrawScope.drawSophisticatedHousing(
         center = center
     )
 
-    // Outer solid border ring (border-2 border-[#49454F])
+    // Outer solid border ring
     drawCircle(
         color = outlineColor.copy(alpha = 0.7f),
         radius = radius,
@@ -182,7 +196,7 @@ private fun DrawScope.drawSophisticatedHousing(
         style = Stroke(width = 2.dp.toPx())
     )
 
-    // Inner dashed track ring (border-1 border-[#49454F] border-dashed)
+    // Inner dashed track ring
     val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12.dp.toPx(), 8.dp.toPx()), 0f)
     drawCircle(
         color = outlineColor.copy(alpha = 0.5f),
@@ -205,13 +219,12 @@ private fun DrawScope.drawRotatingDial(
     textSecondary: Color,
     outlineColor: Color,
     lockedBearing: Float?,
-    bearingColor: Color
+    bearingColor: Color,
+    textPaint: Paint,
+    textBounds: Rect,
+    northNeedlePath: Path,
+    southNeedlePath: Path
 ) {
-    val textPaint = Paint().apply {
-        isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
-
     val tickRadiusOuter = radius - 2.dp.toPx()
     val majorTickLen = 12.dp.toPx()
     val medTickLen = 8.dp.toPx()
@@ -245,7 +258,7 @@ private fun DrawScope.drawRotatingDial(
             else -> 0.9.dp.toPx()
         }
 
-        val p1 = Offset(center.x + (tickRadiusOuter) * cosA, center.y + (tickRadiusOuter) * sinA)
+        val p1 = Offset(center.x + tickRadiusOuter * cosA, center.y + tickRadiusOuter * sinA)
         val p2 = Offset(center.x + (tickRadiusOuter - tickLen) * cosA, center.y + (tickRadiusOuter - tickLen) * sinA)
 
         drawLine(
@@ -256,7 +269,7 @@ private fun DrawScope.drawRotatingDial(
             cap = StrokeCap.Round
         )
 
-        // Draw degree numerals every 30° (except at 0, 90, 180, 270 where cardinal badges sit)
+        // Draw degree numerals every 30°
         if (isMajor && deg % 30 == 0 && deg != 0 && deg != 90 && deg != 180 && deg != 270) {
             val numRadius = tickRadiusOuter - majorTickLen - 12.dp.toPx()
             val textX = center.x + numRadius * cosA
@@ -269,26 +282,24 @@ private fun DrawScope.drawRotatingDial(
                 textPaint.color = textSecondary.toArgb()
                 textPaint.textSize = 9.dp.toPx()
                 textPaint.isFakeBoldText = false
-                val bounds = Rect()
-                textPaint.getTextBounds(numText, 0, numText.length, bounds)
-                drawText(numText, textX, textY + bounds.height() / 2f, textPaint)
+                textPaint.getTextBounds(numText, 0, numText.length, textBounds)
+                drawText(numText, textX, textY + textBounds.height() / 2f, textPaint)
                 restore()
             }
         }
     }
 
-    // Draw Sophisticated Dual-tone Pointer Needle (North: Lavender + Glow, South: Slate outline)
+    // Draw Sophisticated Dual-tone Pointer Needle
     val needleLen = radius * 0.72f
     val needleHalfW = 8.dp.toPx()
 
-    // North Needle with subtle lavender glow
-    val northNeedlePath = Path().apply {
-        moveTo(center.x, center.y - needleLen)
-        lineTo(center.x - needleHalfW, center.y - 10.dp.toPx())
-        lineTo(center.x + needleHalfW, center.y - 10.dp.toPx())
-        close()
-    }
-    // Glow under North needle
+    // Reset and compute North needle
+    northNeedlePath.reset()
+    northNeedlePath.moveTo(center.x, center.y - needleLen)
+    northNeedlePath.lineTo(center.x - needleHalfW, center.y - 10.dp.toPx())
+    northNeedlePath.lineTo(center.x + needleHalfW, center.y - 10.dp.toPx())
+    northNeedlePath.close()
+
     drawPath(
         path = northNeedlePath,
         brush = Brush.radialGradient(
@@ -299,16 +310,16 @@ private fun DrawScope.drawRotatingDial(
     )
     drawPath(northNeedlePath, color = primaryColor, style = Fill)
 
-    // South Needle (Slate)
-    val southNeedlePath = Path().apply {
-        moveTo(center.x, center.y + needleLen)
-        lineTo(center.x - needleHalfW, center.y + 10.dp.toPx())
-        lineTo(center.x + needleHalfW, center.y + 10.dp.toPx())
-        close()
-    }
+    // Reset and compute South needle
+    southNeedlePath.reset()
+    southNeedlePath.moveTo(center.x, center.y + needleLen)
+    southNeedlePath.lineTo(center.x - needleHalfW, center.y + 10.dp.toPx())
+    southNeedlePath.lineTo(center.x + needleHalfW, center.y + 10.dp.toPx())
+    southNeedlePath.close()
+
     drawPath(southNeedlePath, color = outlineColor, style = Fill)
 
-    // Draw Cardinal & Ordinal Points with Elegant Pill Badges
+    // Draw Cardinal & Ordinal Points
     val cardinalBadges = listOf(
         Pair(0, "N"),
         Pair(90, "E"),
@@ -333,7 +344,6 @@ private fun DrawScope.drawRotatingDial(
             save()
             rotate(deg.toFloat(), badgeX, badgeY)
 
-            // Draw pill background
             val pillBgColor = if (isNorth) primaryColor else surfaceVariantColor
             val pillRect = RoundRect(
                 left = badgeX - pillWidth / 2f,
@@ -343,7 +353,6 @@ private fun DrawScope.drawRotatingDial(
                 cornerRadius = CornerRadius(pillHeight / 2f, pillHeight / 2f)
             )
 
-            // Outer border for secondary cardinal pills
             if (!isNorth) {
                 drawRoundRect(
                     color = outlineColor.copy(alpha = 0.6f),
@@ -362,13 +371,11 @@ private fun DrawScope.drawRotatingDial(
                 style = Fill
             )
 
-            // Text
             textPaint.color = (if (isNorth) onPrimaryColor else textPrimary).toArgb()
             textPaint.textSize = 11.dp.toPx()
             textPaint.isFakeBoldText = true
-            val bounds = Rect()
-            textPaint.getTextBounds(label, 0, label.length, bounds)
-            drawText(label, badgeX, badgeY + bounds.height() / 2f, textPaint)
+            textPaint.getTextBounds(label, 0, label.length, textBounds)
+            drawText(label, badgeX, badgeY + textBounds.height() / 2f, textPaint)
 
             restore()
         }
@@ -395,9 +402,8 @@ private fun DrawScope.drawRotatingDial(
             textPaint.color = textSecondary.toArgb()
             textPaint.textSize = 10.dp.toPx()
             textPaint.isFakeBoldText = false
-            val bounds = Rect()
-            textPaint.getTextBounds(label, 0, label.length, bounds)
-            drawText(label, ordX, ordY + bounds.height() / 2f, textPaint)
+            textPaint.getTextBounds(label, 0, label.length, textBounds)
+            drawText(label, ordX, ordY + textBounds.height() / 2f, textPaint)
             restore()
         }
     }
@@ -473,7 +479,6 @@ private fun DrawScope.drawBubbleLevel(
     outlineColor: Color,
     surfaceColor: Color
 ) {
-    // Level boundary circle in Charcoal #1C1B1F
     drawCircle(
         color = surfaceColor,
         radius = radius,
@@ -486,7 +491,6 @@ private fun DrawScope.drawBubbleLevel(
         style = Stroke(width = 1.5.dp.toPx())
     )
 
-    // Inner reference rings
     drawCircle(
         color = outlineColor.copy(alpha = 0.35f),
         radius = radius * 0.6f,
@@ -500,7 +504,6 @@ private fun DrawScope.drawBubbleLevel(
         style = Stroke(width = if (isLevel) 2.dp.toPx() else 1.2.dp.toPx())
     )
 
-    // Crosshair reticle lines
     val reticleLen = radius * 0.85f
     val reticleColor = if (isLevel) levelColor.copy(alpha = 0.6f) else outlineColor.copy(alpha = 0.4f)
     drawLine(
@@ -516,14 +519,12 @@ private fun DrawScope.drawBubbleLevel(
         strokeWidth = 1.dp.toPx()
     )
 
-    // Bubble offset calculation
     val maxTilt = 30f
     val offsetX = (roll / maxTilt).coerceIn(-1f, 1f) * (radius * 0.75f)
     val offsetY = (-pitch / maxTilt).coerceIn(-1f, 1f) * (radius * 0.75f)
     val bubbleCenter = Offset(center.x + offsetX, center.y + offsetY)
     val bubbleRadius = radius * 0.2f
 
-    // Bubble visual
     val bubbleColor = if (isLevel) levelColor else primaryColor
     drawCircle(
         brush = Brush.radialGradient(
@@ -548,18 +549,18 @@ private fun DrawScope.drawBubbleLevel(
 private fun DrawScope.drawTopLubberLine(
     center: Offset,
     radius: Float,
-    indexColor: Color
+    indexColor: Color,
+    lubberPath: Path
 ) {
     val topY = center.y - radius
     val triHeight = 11.dp.toPx()
     val triHalfW = 6.dp.toPx()
 
-    val path = Path().apply {
-        moveTo(center.x, topY + triHeight)
-        lineTo(center.x - triHalfW, topY - 2.dp.toPx())
-        lineTo(center.x + triHalfW, topY - 2.dp.toPx())
-        close()
-    }
+    lubberPath.reset()
+    lubberPath.moveTo(center.x, topY + triHeight)
+    lubberPath.lineTo(center.x - triHalfW, topY - 2.dp.toPx())
+    lubberPath.lineTo(center.x + triHalfW, topY - 2.dp.toPx())
+    lubberPath.close()
 
-    drawPath(path, color = indexColor, style = Fill)
+    drawPath(lubberPath, color = indexColor, style = Fill)
 }

@@ -13,7 +13,7 @@ import com.example.sensor.CompassSensorManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -39,42 +39,23 @@ class CompassViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         viewModelScope.launch {
-            combine(
-                sensorManager.azimuthFlow,
-                sensorManager.pitchFlow,
-                sensorManager.rollFlow,
-                sensorManager.magneticFieldFlow,
-                sensorManager.accuracyFlow,
-                sensorManager.declinationFlow,
-                sensorManager.locationFlow,
-                sensorManager.isSensorAvailableFlow
-            ) { values ->
-                val azimuth = values[0] as Float
-                val pitch = values[1] as Float
-                val roll = values[2] as Float
-                val magneticField = values[3] as Float
-                val accuracy = values[4] as Int
-                val declination = values[5] as Float
-                @Suppress("UNCHECKED_CAST")
-                val loc = values[6] as Triple<Double?, Double?, Double?>
-                val sensorAvail = values[7] as Boolean
-
+            sensorManager.sensorDataFlow.collectLatest { sensorData ->
                 _state.update { current ->
                     current.copy(
-                        azimuth = azimuth,
-                        pitch = pitch,
-                        roll = roll,
-                        magneticField = magneticField,
-                        accuracy = accuracy,
-                        declination = declination,
-                        latitude = loc.first,
-                        longitude = loc.second,
-                        altitude = loc.third,
-                        isSensorAvailable = sensorAvail
+                        azimuth = sensorData.azimuth,
+                        pitch = sensorData.pitch,
+                        roll = sensorData.roll,
+                        magneticField = sensorData.magneticField,
+                        accuracy = sensorData.accuracy,
+                        declination = sensorData.declination,
+                        latitude = sensorData.latitude,
+                        longitude = sensorData.longitude,
+                        altitude = sensorData.altitude,
+                        isSensorAvailable = sensorData.isSensorAvailable
                     )
                 }
                 checkHapticFeedback(_state.value)
-            }.collect {}
+            }
         }
     }
 

@@ -21,6 +21,19 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+data class RawSensorData(
+    val azimuth: Float = 0f,
+    val pitch: Float = 0f,
+    val roll: Float = 0f,
+    val magneticField: Float = 45f,
+    val accuracy: Int = SensorManager.SENSOR_STATUS_ACCURACY_HIGH,
+    val declination: Float = 0f,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val altitude: Double? = null,
+    val isSensorAvailable: Boolean = true
+)
+
 class CompassSensorManager(private val context: Context) : SensorEventListener, LocationListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -30,34 +43,13 @@ class CompassSensorManager(private val context: Context) : SensorEventListener, 
     private val accelerometerSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val magneticSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
-    private val _azimuthFlow = MutableStateFlow(0f)
-    val azimuthFlow: StateFlow<Float> = _azimuthFlow.asStateFlow()
-
-    private val _pitchFlow = MutableStateFlow(0f)
-    val pitchFlow: StateFlow<Float> = _pitchFlow.asStateFlow()
-
-    private val _rollFlow = MutableStateFlow(0f)
-    val rollFlow: StateFlow<Float> = _rollFlow.asStateFlow()
-
-    private val _magneticFieldFlow = MutableStateFlow(45f)
-    val magneticFieldFlow: StateFlow<Float> = _magneticFieldFlow.asStateFlow()
-
-    private val _accuracyFlow = MutableStateFlow(SensorManager.SENSOR_STATUS_ACCURACY_HIGH)
-    val accuracyFlow: StateFlow<Int> = _accuracyFlow.asStateFlow()
-
-    private val _declinationFlow = MutableStateFlow(0f)
-    val declinationFlow: StateFlow<Float> = _declinationFlow.asStateFlow()
-
-    private val _locationFlow = MutableStateFlow<Triple<Double?, Double?, Double?>>(Triple(null, null, null))
-    val locationFlow: StateFlow<Triple<Double?, Double?, Double?>> = _locationFlow.asStateFlow()
-
-    private val _isSensorAvailableFlow = MutableStateFlow(true)
-    val isSensorAvailableFlow: StateFlow<Boolean> = _isSensorAvailableFlow.asStateFlow()
+    private val _sensorDataFlow = MutableStateFlow(RawSensorData())
+    val sensorDataFlow: StateFlow<RawSensorData> = _sensorDataFlow.asStateFlow()
 
     // Smoothing filter buffers
     private var smoothedSin = 0f
     private var smoothedCos = 1f
-    private val alpha = 0.15f // Smoothing factor for responsive yet steady dial
+    private val alpha = 0.20f // Smoothing factor for responsive yet steady dial
 
     private val accelerometerReading = FloatArray(3)
     private val magnetometerReading = FloatArray(3)
@@ -67,15 +59,22 @@ class CompassSensorManager(private val context: Context) : SensorEventListener, 
     private val rotationMatrix = FloatArray(9)
     private val orientationAngles = FloatArray(3)
 
+    private var currentMagneticField = 45f
+    private var currentAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    private var currentDeclination = 0f
+    private var currentLat: Double? = null
+    private var currentLon: Double? = null
+    private var currentAlt: Double? = null
+
     fun startListening() {
         val hasRotation = rotationVectorSensor != null
         val hasAccMag = accelerometerSensor != null && magneticSensor != null
 
         if (!hasRotation && !hasAccMag) {
-            _isSensorAvailableFlow.value = false
+            _sensorDataFlow.value = _sensorDataFlow.value.copy(isSensorAvailable = false)
             return
         }
-        _isSensorAvailableFlow.value = true
+        _sensorDataFlow.value = _sensorDataFlow.value.copy(isSensorAvailable = true)
 
         if (hasRotation) {
             sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_UI)
@@ -84,7 +83,7 @@ class CompassSensorManager(private val context: Context) : SensorEventListener, 
             sensorManager.registerListener(this, magneticSensor, SensorManager.SENSOR_DELAY_UI)
         }
 
-        // Also listen to magnetic sensor to get magnetic field strength even if rotation vector is used
+        // Also listen to magnetic sensor to get magnetic field strength if rotation vector is primary
         if (hasRotation && magneticSensor != null) {
             sensorManager.registerListener(this, magneticSensor, SensorManager.SENSOR_DELAY_NORMAL)
         }
@@ -164,7 +163,7 @@ class CompassSensorManager(private val context: Context) : SensorEventListener, 
                     event.values[1] * event.values[1] +
                     event.values[2] * event.values[2]
                 )
-                _magneticFieldFlow.value = fieldStrength
+                currentMagneticField = fieldStrength
 
                 if (hasAccelerometer && rotationVectorSensor == null) {
                     computeOrientationFromAccMag()
@@ -204,18 +203,28 @@ class CompassSensorManager(private val context: Context) : SensorEventListener, 
         var smoothedDeg = Math.toDegrees(atan2(smoothedSin.toDouble(), smoothedCos.toDouble())).toFloat()
         smoothedDeg = (smoothedDeg % 360f + 360f) % 360f
 
-        _azimuthFlow.value = smoothedDeg
-
-        // Pitch & Roll in degrees
         val pitchDeg = Math.toDegrees(angles[1].toDouble()).toFloat()
         val rollDeg = Math.toDegrees(angles[2].toDouble()).toFloat()
-        _pitchFlow.value = pitchDeg
-        _rollFlow.value = rollDeg
+
+        // Single atomic state update to prevent UI recomposition floods
+        _sensorDataFlow.value = RawSensorData(
+            azimuth = smoothedDeg,
+            pitch = pitchDeg,
+            roll = rollDeg,
+            magneticField = currentMagneticField,
+            accuracy = currentAccuracy,
+            declination = currentDeclination,
+            latitude = currentLat,
+            longitude = currentLon,
+            altitude = currentAlt,
+            isSensorAvailable = true
+        )
     }
 
     override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {
         if (sensor.type == Sensor.TYPE_MAGNETIC_FIELD || sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
-            _accuracyFlow.value = accuracy
+            currentAccuracy = accuracy
+            _sensorDataFlow.value = _sensorDataFlow.value.copy(accuracy = accuracy)
         }
     }
 
@@ -229,17 +238,23 @@ class CompassSensorManager(private val context: Context) : SensorEventListener, 
     override fun onProviderDisabled(provider: String) {}
 
     private fun updateGeomagneticDeclination(location: Location) {
-        _locationFlow.value = Triple(
-            location.latitude,
-            location.longitude,
-            if (location.hasAltitude()) location.altitude else null
-        )
+        currentLat = location.latitude
+        currentLon = location.longitude
+        currentAlt = if (location.hasAltitude()) location.altitude else null
+
         val geomagneticField = GeomagneticField(
             location.latitude.toFloat(),
             location.longitude.toFloat(),
             location.altitude.toFloat(),
             location.time
         )
-        _declinationFlow.value = geomagneticField.declination
+        currentDeclination = geomagneticField.declination
+
+        _sensorDataFlow.value = _sensorDataFlow.value.copy(
+            latitude = currentLat,
+            longitude = currentLon,
+            altitude = currentAlt,
+            declination = currentDeclination
+        )
     }
 }
