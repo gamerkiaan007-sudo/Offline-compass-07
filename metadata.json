@@ -1,0 +1,6 @@
+{
+  "name": "Offline Compass",
+  "description": "High-precision offline tactical compass with sensor orientation, pitch and roll level, magnetic field strength, true/magnetic north, and bearing lock.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
